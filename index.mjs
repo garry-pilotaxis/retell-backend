@@ -115,6 +115,11 @@ if (event !== "call_analyzed") {
           .single();
         if (cErr) throw cErr;
 
+// 👇 ADD DEBUG HERE
+    console.log("CLIENT ROW:", client);
+    console.log("SENDING TO:", client?.email);
+    console.log("FROM_EMAIL:", process.env.FROM_EMAIL);
+
         // ✅ Extract fields (we may adjust after we see body)
         const retell_call_id = req.body.call_id || req.body.id || null;
         const transcript = req.body.transcript || "";
