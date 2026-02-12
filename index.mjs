@@ -82,10 +82,6 @@ app.post("/retell-webhook", async (req, res) => {
     if (!client_id) {
       return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
     }
-    const client_id = req.query.client_id;
-    if (!client_id) {
-      return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
-    }
 
     // Fetch client email
     const { data: client, error: cErr } = await supabase
