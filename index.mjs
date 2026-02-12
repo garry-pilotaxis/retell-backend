@@ -81,71 +81,80 @@ app.all("/retell-webhook", (req, res, next) => {
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
-    // 🔐 Token auth
-    
-    // client_id
+    const token = req.query.token;
+    if (!token || token !== process.env.WEBHOOK_TOKEN) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
     const client_id = req.query.client_id;
     if (!client_id) {
-      return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
+      return res.status(400).json({ ok: false, error: "Missing client_id" });
     }
 
-    // Fetch client
-    const { data: client, error: cErr } = await supabase
-      .from("clients")
-      .select("email,name")
-      .eq("id", client_id)
-      .single();
+    // reply immediately (critical)
+    res.status(200).json({ ok: true, accepted: true });
 
-    if (cErr) throw cErr;
+    // do heavy work after response
+    setImmediate(async () => {
+      try {
+        console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
 
-    const retell_call_id = req.body.call_id || req.body.id || null;
-    const transcript = req.body.transcript || "";
-    const summary = req.body.summary || "";
-    const from_number = req.body.from_number || req.body.from || "";
+        // ✅ Fetch client
+        const { data: client, error: cErr } = await supabase
+          .from("clients")
+          .select("email,name")
+          .eq("id", client_id)
+          .single();
+        if (cErr) throw cErr;
 
-    const text = (summary + " " + transcript).toLowerCase();
-    let action = "unknown";
-    if (text.includes("cancel")) action = "cancel";
-    else if (text.includes("resched")) action = "reschedule";
-    else if (text.includes("book") || text.includes("schedule")) action = "book";
+        // ✅ Extract fields (we may adjust after we see body)
+        const retell_call_id = req.body.call_id || req.body.id || null;
+        const transcript = req.body.transcript || "";
+        const summary = req.body.summary || "";
+        const from_number = req.body.from_number || req.body.from || "";
 
-    const { error: insertErr } = await supabase.from("calls").insert({
-      client_id,
-      retell_call_id,
-      action,
-      summary,
-      transcript,
-      from_number,
-    });
+        const text = (summary + " " + transcript).toLowerCase();
+        let action = "unknown";
+        if (text.includes("cancel")) action = "cancel";
+        else if (text.includes("resched")) action = "reschedule";
+        else if (text.includes("book") || text.includes("schedule")) action = "book";
 
-    if (insertErr) throw insertErr;
+        // ✅ Save call
+        const { error: insertErr } = await supabase.from("calls").insert({
+          client_id,
+          retell_call_id,
+          action,
+          summary,
+          transcript,
+          from_number,
+        });
+        if (insertErr) throw insertErr;
 
-    const sendResult = await resend.emails.send({
-      from: process.env.FROM_EMAIL,
-      to: client.email,
-      subject: `AI Call: ${action.toUpperCase()}`,
-      html: `
-        <h2>AI Call Summary</h2>
-        <p><b>Client:</b> ${client.name || ""}</p>
-        <p><b>Action:</b> ${action}</p>
-        <p><b>From:</b> ${from_number}</p>
-        <h3>Summary</h3>
-        <p>${summary || "(none)"}</p>
-        <h3>Transcript</h3>
-        <pre style="white-space:pre-wrap;">${transcript || "(none)"}</pre>
-      `,
-    });
+        // ✅ Send email
+        const sendResult = await resend.emails.send({
+          from: process.env.FROM_EMAIL,
+          to: client.email,
+          subject: `AI Call: ${action.toUpperCase()}`,
+          html: `
+            <h2>AI Call Summary</h2>
+            <p><b>Client:</b> ${client.name || ""}</p>
+            <p><b>Action:</b> ${action}</p>
+            <p><b>From:</b> ${from_number}</p>
+            <h3>Summary</h3>
+            <p>${summary || "(none)"}</p>
+            <h3>Transcript</h3>
+            <pre style="white-space:pre-wrap;">${transcript || "(none)"}</pre>
+          `,
+        });
 
-    if (sendResult.error) {
-      return res.status(500).json({ ok: false, error: sendResult.error.message });
-    }
-
-    return res.json({
-      ok: true,
-      email_id: sendResult.data?.id,
-      version: "v2-webhook",
+        if (sendResult.error) throw new Error(sendResult.error.message);
+        console.log("EMAIL SENT:", sendResult.data?.id);
+      } catch (e) {
+        console.error("ASYNC WEBHOOK ERROR:", e);
+      }
     });
   } catch (e) {
+    console.error("WEBHOOK ERROR:", e);
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
