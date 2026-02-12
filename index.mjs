@@ -1,10 +1,15 @@
+console.log("RUNNING CODE VERSION: CLEAN_V3");
 import express from "express";
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
 const app = express();
+
+// ✅ Increase payload limit (Retell transcripts can be big)
 app.use(express.json({ limit: "10mb" }));
+
+// ✅ Simple request logger
 app.use((req, res, next) => {
   console.log("INCOMING", req.method, req.path, req.query);
   next();
@@ -20,7 +25,7 @@ const supabase = createClient(
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 app.get("/", (req, res) => {
-  res.send("Backend is running.");
+  return res.send("Backend is running.");
 });
 
 // ✅ Test: Supabase insert
@@ -50,7 +55,9 @@ app.get("/test-email", async (req, res) => {
   try {
     const to = req.query.to;
     if (!to) {
-      return res.status(400).json({ ok: false, error: "Add ?to=youremail@gmail.com" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Add ?to=youremail@gmail.com" });
     }
 
     const result = await resend.emails.send({
@@ -70,69 +77,123 @@ app.get("/test-email", async (req, res) => {
   }
 });
 
-// Allow Retell verification pings (GET)
+// ✅ Allow Retell verification pings (GET)
 app.all("/retell-webhook", (req, res, next) => {
-  if (req.method === "GET") {
+  if (req.method === "GET" || req.method === "HEAD") {
     return res.status(200).send("ok");
   }
   return next();
 });
 
+// -------- helpers --------
+function buildTranscriptFromToolCalls(transcript_with_tool_calls) {
+  // Retell can send transcript as an array of turns/messages.
+  // We’ll try to convert it into readable text.
+  if (!Array.isArray(transcript_with_tool_calls)) return "";
+
+  const lines = [];
+  for (const t of transcript_with_tool_calls) {
+    // common shapes: { role, content } or { speaker, text } etc.
+    const role = t.role || t.speaker || t.from || "unknown";
+    const text =
+      t.content ||
+      t.text ||
+      t.message ||
+      (typeof t === "string" ? t : "") ||
+      "";
+
+    if (text) lines.push(`${role}: ${text}`);
+  }
+  return lines.join("\n");
+}
+
+function detectAction(summary, transcript) {
+  const text = `${summary} ${transcript}`.toLowerCase();
+  if (text.includes("cancel")) return "cancel";
+  if (text.includes("resched")) return "reschedule";
+  if (text.includes("book") || text.includes("schedule")) return "book";
+  return "unknown";
+}
+
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
+    // 🔐 Token auth (Retell can’t send headers in your setup)
     const token = req.query.token;
     if (!token || token !== process.env.WEBHOOK_TOKEN) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
     const client_id = req.query.client_id;
-const event = req.body?.event;
-
-// Only send email when the call is finalized
-if (event !== "call_analyzed") {
-  return res.json({ ok: true, skipped: true, reason: `Ignoring event ${event}` });
-}
-    console.log("RETELL EVENT:", req.body?.event);
-    console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
     if (!client_id) {
       return res.status(400).json({ ok: false, error: "Missing client_id" });
     }
 
-    // reply immediately (critical)
+    // ✅ Only process final event
+    const event = req.body?.event;
+    console.log("RETELL EVENT:", event);
+    console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
+
+    if (event !== "call_analyzed") {
+      return res.json({ ok: true, skipped: true, event });
+    }
+
+    // ✅ respond immediately (Retell expects fast response)
     res.status(200).json({ ok: true, accepted: true });
 
-    // do heavy work after response
+    // ✅ heavy work after response
     setImmediate(async () => {
       try {
-        console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
-
-        // ✅ Fetch client
+        // Fetch client row
         const { data: client, error: cErr } = await supabase
           .from("clients")
           .select("email,name")
           .eq("id", client_id)
           .single();
+
         if (cErr) throw cErr;
 
-// 👇 ADD DEBUG HERE
-    console.log("CLIENT ROW:", client);
-    console.log("SENDING TO:", client?.email);
-    console.log("FROM_EMAIL:", process.env.FROM_EMAIL);
+        console.log("CLIENT ROW:", client);
+        console.log("SENDING TO:", client?.email);
+        console.log("FROM_EMAIL:", process.env.FROM_EMAIL);
 
-        // ✅ Extract fields (we may adjust after we see body)
-        const retell_call_id = req.body.call_id || req.body.id || null;
-        const transcript = req.body.transcript || "";
-        const summary = req.body.summary || "";
-        const from_number = req.body.from_number || req.body.from || "";
+        // ✅ Extract from real Retell payload
+const call = req.body?.call || {};
+const retell_call_id = call.call_id || req.body?.call_id || req.body?.id || null;
 
-        const text = (summary + " " + transcript).toLowerCase();
-        let action = "unknown";
-        if (text.includes("cancel")) action = "cancel";
-        else if (text.includes("resched")) action = "reschedule";
-        else if (text.includes("book") || text.includes("schedule")) action = "book";
+const from_number =
+  call.from_number ||
+  call.from ||
+  req.body?.from_number ||
+  req.body?.from ||
+  "";
 
-        // ✅ Save call
+// summary can be in different names depending on Retell event
+const summary =
+  call.call_summary ||
+  call.summary ||
+  req.body?.summary ||
+  "";
+
+// transcript array (Retell) -> convert to readable text
+const twtc = req.body?.transcript_with_tool_calls || [];
+const transcript = Array.isArray(twtc)
+  ? twtc
+      .map((m) => {
+        const role = m.role || "unknown";
+        const content = m.content || "";
+        return `${role.toUpperCase()}: ${content}`;
+      })
+      .join("\n")
+  : (req.body?.transcript || "");
+
+        console.log("FINAL CALL_ID:", retell_call_id);
+        console.log("SUMMARY LENGTH:", summary?.length || 0);
+        console.log("TRANSCRIPT LENGTH:", transcript?.length || 0);
+
+        const action = detectAction(summary, transcript);
+
+        // Save to DB
         const { error: insertErr } = await supabase.from("calls").insert({
           client_id,
           retell_call_id,
@@ -141,20 +202,23 @@ if (event !== "call_analyzed") {
           transcript,
           from_number,
         });
+
         if (insertErr) throw insertErr;
 
-        // ✅ Send email
+        // Send email (only one email now — final)
         const sendResult = await resend.emails.send({
           from: process.env.FROM_EMAIL,
           to: client.email,
-          subject: `AI Call: ${action.toUpperCase()}`,
+          subject: `AI Call Summary: ${action.toUpperCase()}`,
           html: `
             <h2>AI Call Summary</h2>
             <p><b>Client:</b> ${client.name || ""}</p>
             <p><b>Action:</b> ${action}</p>
-            <p><b>From:</b> ${from_number}</p>
+            <p><b>From:</b> ${from_number || "(unknown)"}</p>
+
             <h3>Summary</h3>
             <p>${summary || "(none)"}</p>
+
             <h3>Transcript</h3>
             <pre style="white-space:pre-wrap;">${transcript || "(none)"}</pre>
           `,
