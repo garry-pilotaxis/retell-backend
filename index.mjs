@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use((req, res, next) => {
   console.log("INCOMING", req.method, req.path, req.query);
   next();
