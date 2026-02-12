@@ -87,6 +87,12 @@ app.post("/retell-webhook", async (req, res) => {
     }
 
     const client_id = req.query.client_id;
+const event = req.body?.event;
+
+// Only send email when the call is finalized
+if (event !== "call_analyzed") {
+  return res.json({ ok: true, skipped: true, reason: `Ignoring event ${event}` });
+}
     console.log("RETELL EVENT:", req.body?.event);
     console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
     if (!client_id) {
