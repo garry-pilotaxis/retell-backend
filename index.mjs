@@ -69,6 +69,19 @@ app.get("/test-email", async (req, res) => {
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
+app.post("/retell-webhook", async (req, res) => {
+  try {
+
+    // 🔒 Webhook security
+    const secret = req.header("x-webhook-secret");
+    if (secret !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
+    const client_id = req.query.client_id;
+    if (!client_id) {
+      return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
+    }
     const client_id = req.query.client_id;
     if (!client_id) {
       return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
