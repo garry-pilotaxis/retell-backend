@@ -66,6 +66,14 @@ app.get("/test-email", async (req, res) => {
   }
 });
 
+// Allow Retell verification pings (GET)
+app.all("/retell-webhook", (req, res, next) => {
+  if (req.method === "GET") {
+    return res.status(200).send("ok");
+  }
+  return next();
+});
+
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
