@@ -69,8 +69,6 @@ app.get("/test-email", async (req, res) => {
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
-app.post("/retell-webhook", async (req, res) => {
-  try {
 
     // 🔒 Webhook security
     const secret = req.header("x-webhook-secret");
