@@ -26,6 +26,77 @@ const supabase = createClient(
 // Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+import { google } from "googleapis";
+
+// ---- Google OAuth helper ----
+function getOAuthClient() {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URL
+  );
+}
+
+// 1) Start OAuth: redirects client to Google
+app.get("/onboard/google/start", async (req, res) => {
+  try {
+    const client_id = req.query.client_id;
+    if (!client_id) return res.status(400).send("Missing client_id");
+
+    const oauth2Client = getOAuthClient();
+
+    // We pass client_id in state so we know who connected
+    const url = oauth2Client.generateAuthUrl({
+      access_type: "offline", // gives refresh_token
+      prompt: "consent",      // forces refresh_token first time
+      scope: ["https://www.googleapis.com/auth/calendar.events"],
+      state: String(client_id),
+    });
+
+    return res.redirect(url);
+  } catch (e) {
+    return res.status(500).send(e.message);
+  }
+});
+
+// 2) Callback: Google redirects here with ?code=...
+app.get("/onboard/google/callback", async (req, res) => {
+  try {
+    const code = req.query.code;
+    const client_id = req.query.state; // we stored it in state
+
+    if (!code) return res.status(400).send("Missing code");
+    if (!client_id) return res.status(400).send("Missing state/client_id");
+
+    const oauth2Client = getOAuthClient();
+
+    const { tokens } = await oauth2Client.getToken(String(code));
+
+    // refresh_token is what matters long-term
+    const refresh_token = tokens.refresh_token;
+    if (!refresh_token) {
+      return res.status(400).send(
+        "No refresh_token received. Try again and make sure prompt=consent."
+      );
+    }
+
+    // Store in Supabase (client_google table)
+    const { error } = await supabase
+      .from("client_google")
+      .upsert({
+        client_id,
+        refresh_token,
+        calendar_id: "primary",
+      });
+
+    if (error) throw error;
+
+    return res.send("✅ Google Calendar connected! You can close this tab.");
+  } catch (e) {
+    return res.status(500).send("OAuth failed: " + e.message);
+  }
+});
+
 // --- routes ---
 app.get("/", (req, res) => {
   return res.send("Backend is running.");
