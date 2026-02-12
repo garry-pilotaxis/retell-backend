@@ -80,12 +80,10 @@ if (!expectedSecret) {
   });
 }
 
-const secret = req.header("x-webhook-secret");
-
-if (!secret || secret !== expectedSecret) {
+const token = req.query.token;
+if (!token || token !== process.env.WEBHOOK_TOKEN) {
   return res.status(401).json({ ok: false, error: "Unauthorized" });
 }
-
     // Fetch client email
     const { data: client, error: cErr } = await supabase
       .from("clients")
