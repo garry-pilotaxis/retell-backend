@@ -77,22 +77,15 @@ app.all("/retell-webhook", (req, res, next) => {
 // ✅ MAIN: Retell webhook → save call → email client
 app.post("/retell-webhook", async (req, res) => {
   try {
+    // 🔐 Token auth
+    
+    // client_id
+    const client_id = req.query.client_id;
+    if (!client_id) {
+      return res.status(400).json({ ok: false, error: "Missing client_id in URL" });
+    }
 
-    // 🔒 Webhook security
-const expectedSecret = process.env.WEBHOOK_SECRET;
-
-if (!expectedSecret) {
-  return res.status(500).json({
-    ok: false,
-    error: "Server misconfigured: WEBHOOK_SECRET missing",
-  });
-}
-
-const token = req.query.token;
-if (!token || token !== process.env.WEBHOOK_TOKEN) {
-  return res.status(401).json({ ok: false, error: "Unauthorized" });
-}
-    // Fetch client email
+    // Fetch client
     const { data: client, error: cErr } = await supabase
       .from("clients")
       .select("email,name")
@@ -101,20 +94,17 @@ if (!token || token !== process.env.WEBHOOK_TOKEN) {
 
     if (cErr) throw cErr;
 
-    // Extract fields
     const retell_call_id = req.body.call_id || req.body.id || null;
     const transcript = req.body.transcript || "";
     const summary = req.body.summary || "";
     const from_number = req.body.from_number || req.body.from || "";
 
-    // Basic action detection
     const text = (summary + " " + transcript).toLowerCase();
     let action = "unknown";
     if (text.includes("cancel")) action = "cancel";
     else if (text.includes("resched")) action = "reschedule";
     else if (text.includes("book") || text.includes("schedule")) action = "book";
 
-    // Save to DB
     const { error: insertErr } = await supabase.from("calls").insert({
       client_id,
       retell_call_id,
@@ -123,9 +113,9 @@ if (!token || token !== process.env.WEBHOOK_TOKEN) {
       transcript,
       from_number,
     });
+
     if (insertErr) throw insertErr;
 
-    // Send email
     const sendResult = await resend.emails.send({
       from: process.env.FROM_EMAIL,
       to: client.email,
