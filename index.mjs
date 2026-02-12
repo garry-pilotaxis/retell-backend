@@ -87,6 +87,8 @@ app.post("/retell-webhook", async (req, res) => {
     }
 
     const client_id = req.query.client_id;
+    console.log("RETELL EVENT:", req.body?.event);
+    console.log("RETELL BODY KEYS:", Object.keys(req.body || {}));
     if (!client_id) {
       return res.status(400).json({ ok: false, error: "Missing client_id" });
     }
