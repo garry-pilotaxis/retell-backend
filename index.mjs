@@ -290,7 +290,9 @@ function detectAction(summary, transcript) {
 }
 
 // -------------------- Routes --------------------
-app.get("/", (req, res) => res.send("Backend is running."));
+app.get("/", (req, res) => {
+  res.send("FINAL_STABLE_V1__" + new Date().toISOString());
+});
 app.get("/ping", (req, res) => res.json({ ok: true, pong: true }));
 app.get("/health", (req, res) =>
   res.json({ ok: true, time: new Date().toISOString(), version: "FINAL_STABLE_V1" })
