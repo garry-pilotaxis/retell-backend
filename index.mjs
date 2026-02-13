@@ -6,6 +6,8 @@ import { Resend } from "resend";
 import axios from "axios";
 import { google } from "googleapis";
 
+console.log("CWD:", process.cwd());
+console.log("TOOL_TOKEN ENV:", process.env.TOOL_TOKEN ? "SET" : "MISSING");
 console.log("RUNNING CODE VERSION: PERFECT_V2_MULTI_CLIENT");
 
 // -------------------- App --------------------
@@ -480,6 +482,53 @@ app.post("/tools/reschedule-appointment", async (req, res) => {
       new_appointment_id: newAppt.id,
       new_google_event_id: newGoogleEventId,
     });
+  } catch (e) {
+    const status = e.status || 500;
+    return res.status(status).json({ ok: false, error: e.message });
+  }
+});
+app.post("/tools/find-appointment", async (req, res) => {
+  try {
+    requireQueryToken(req, "TOOL_TOKEN");
+
+    const {
+      client_id,
+      customer_phone,
+      customer_email,
+      from_date, // "2026-02-15"
+      to_date,   // "2026-02-20"
+      limit = 5
+    } = req.body || {};
+
+    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
+    if (!customer_phone && !customer_email)
+      return res.status(400).json({ ok: false, error: "Need customer_phone or customer_email" });
+
+    // default: next 30 days if not provided
+    const now = new Date();
+    const defaultFrom = now.toISOString();
+    const defaultTo = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const fromISO = from_date ? new Date(`${from_date}T00:00:00-05:00`).toISOString() : defaultFrom;
+    const toISO = to_date ? new Date(`${to_date}T23:59:59-05:00`).toISOString() : defaultTo;
+
+    let q = supabase
+      .from("appointments")
+      .select("id,start_time,end_time,status,customer_name,customer_email,customer_phone,title")
+      .eq("client_id", client_id)
+      .in("status", ["booked"]) // only active appointments
+      .gte("start_time", fromISO)
+      .lte("start_time", toISO)
+      .order("start_time", { ascending: true })
+      .limit(limit);
+
+    if (customer_phone) q = q.eq("customer_phone", customer_phone);
+    if (customer_email) q = q.eq("customer_email", customer_email);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    return res.json({ ok: true, matches: data || [] });
   } catch (e) {
     const status = e.status || 500;
     return res.status(status).json({ ok: false, error: e.message });
