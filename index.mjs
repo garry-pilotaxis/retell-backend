@@ -38,9 +38,15 @@ function mustEnv(name) {
 // - WEBHOOK_TOKEN: for Retell webhook (Retell can’t add custom headers)
 // - TOOL_TOKEN: for Retell tool/function calls
 function requireQueryToken(req, tokenName) {
-  const got = req.query?.token;
-  const expected = process.env[tokenName];
-  if (!expected) throw new Error(`Server misconfigured: ${tokenName} missing`);
+  const got = String(req.query?.token || "").trim();
+  const expected = String(process.env[tokenName] || "").trim();
+
+  if (!expected) {
+    const err = new Error(`Server misconfigured: ${tokenName} missing`);
+    err.status = 500;
+    throw err;
+  }
+
   if (!got || got !== expected) {
     const err = new Error("Unauthorized");
     err.status = 401;
