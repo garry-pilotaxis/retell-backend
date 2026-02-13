@@ -114,7 +114,6 @@ function normalizeTranscriptFromRetellCall(call) {
 
   return "";
 }
-async function getClientIdFromToolToken(req) {
   const token = String(req.query?.token || "").trim();
   if (!token) {
     const err = new Error("Missing token");
@@ -142,7 +141,6 @@ async function getClientIdFromToolToken(req) {
   return data.client_id;
 }
 
-async function getClientIdFromToolToken(req) {
   const token = String(req.query?.token || "").trim();
   if (!token) {
     const err = new Error("Missing token");
@@ -338,7 +336,6 @@ app.post("/tools/check-availability", async (req, res) => {
 
 app.post("/tools/book-appointment", async (req, res) => {
   try {
-const client_id = await getClientIdFromToolToken(req);
 
 const {
   start_time,
@@ -415,7 +412,6 @@ const {
 
 app.post("/tools/cancel-appointment", async (req, res) => {
   try {
-    const client_id = await getClientIdFromToolToken(req);
 
     const { client_id, appointment_id } = req.body || {};
     
@@ -448,7 +444,6 @@ app.post("/tools/cancel-appointment", async (req, res) => {
 
 app.post("/tools/reschedule-appointment", async (req, res) => {
   try {
-    const client_id = await getClientIdFromToolToken(req);
 
     const {
       client_id,
@@ -542,7 +537,6 @@ app.post("/tools/reschedule-appointment", async (req, res) => {
 });
 app.post("/tools/find-appointment", async (req, res) => {
   try {
-    const client_id = await getClientIdFromToolToken(req);
 
     const {
       client_id,
