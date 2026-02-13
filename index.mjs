@@ -29,6 +29,22 @@ app.use((req, res, next) => {
   );
   next();
 });
+app.get("/debug/routes", (req, res) => {
+  const routes = [];
+  const stack = app?._router?.stack || [];
+  for (const layer of stack) {
+    if (layer.route?.path) {
+      routes.push({
+        path: layer.route.path,
+        methods: Object.keys(layer.route.methods || {}).map(m => m.toUpperCase()),
+      });
+    }
+  }
+  res.json({ ok: true, routes });
+});
+app.get("/version", (req, res) => {
+  res.json({ ok: true, version: "BOOK_ROUTE_FIX__2026-02-13_23-30" });
+});
 
 function mustEnv(name) {
   const v = process.env[name];
