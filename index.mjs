@@ -114,6 +114,61 @@ function normalizeTranscriptFromRetellCall(call) {
 
   return "";
 }
+async function getClientIdFromToolToken(req) {
+  const token = String(req.query?.token || "").trim();
+  if (!token) {
+    const err = new Error("Missing token");
+    err.status = 401;
+    throw err;
+  }
+
+  const { data, error } = await supabase
+    .from("client_tool_tokens")
+    .select("client_id,is_active")
+    .eq("token", token)
+    .single();
+
+  if (error || !data) {
+    const err = new Error("Unauthorized (token not found)");
+    err.status = 401;
+    throw err;
+  }
+  if (!data.is_active) {
+    const err = new Error("Unauthorized (token inactive)");
+    err.status = 401;
+    throw err;
+  }
+
+  return data.client_id;
+}
+
+async function getClientIdFromToolToken(req) {
+  const token = String(req.query?.token || "").trim();
+  if (!token) {
+    const err = new Error("Missing token");
+    err.status = 401;
+    throw err;
+  }
+
+  const { data, error } = await supabase
+    .from("client_tool_tokens")
+    .select("client_id,is_active")
+    .eq("token", token)
+    .single();
+
+  if (error || !data) {
+    const err = new Error("Unauthorized (token not found)");
+    err.status = 401;
+    throw err;
+  }
+  if (!data.is_active) {
+    const err = new Error("Unauthorized (token inactive)");
+    err.status = 401;
+    throw err;
+  }
+
+  return data.client_id;
+}
 
 async function fetchRetellCall(call_id) {
   mustEnv("RETELL_API_KEY");
@@ -161,7 +216,6 @@ app.get("/test-email", async (req, res) => {
 app.get("/onboard/google/start", async (req, res) => {
   try {
     const client_id = req.query.client_id;
-    if (!client_id) return res.status(400).send("Missing client_id");
 
     const oauth2Client = getOAuthClient();
 
@@ -219,7 +273,7 @@ app.get("/onboard/google/callback", async (req, res) => {
 // Helper: list busy blocks and return slots (simple)
 app.post("/tools/check-availability", async (req, res) => {
   try {
-    requireQueryToken(req, "TOOL_TOKEN");
+    const client_id = await getClientIdFromToolToken(req);
 
     const {
       client_id,
@@ -284,21 +338,20 @@ app.post("/tools/check-availability", async (req, res) => {
 
 app.post("/tools/book-appointment", async (req, res) => {
   try {
-    requireQueryToken(req, "TOOL_TOKEN");
+const client_id = await getClientIdFromToolToken(req);
 
-    const {
-      client_id,
-      start_time,
-      end_time,
-      timezone = "America/Toronto",
-      title = "Appointment",
-      customer_name,
-      customer_email,
-      customer_phone,
-      notes,
-    } = req.body || {};
+const {
+  start_time,
+  end_time,
+  timezone = "America/Toronto",
+  title = "Appointment",
+  customer_name,
+  customer_email,
+  customer_phone,
+  notes,
+} = req.body || {};
 
-    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
+   
     if (!start_time || !end_time)
       return res.status(400).json({ ok: false, error: "Missing start_time/end_time" });
 
@@ -362,10 +415,10 @@ app.post("/tools/book-appointment", async (req, res) => {
 
 app.post("/tools/cancel-appointment", async (req, res) => {
   try {
-    requireQueryToken(req, "TOOL_TOKEN");
+    const client_id = await getClientIdFromToolToken(req);
 
     const { client_id, appointment_id } = req.body || {};
-    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
+    
     if (!appointment_id)
       return res.status(400).json({ ok: false, error: "Missing appointment_id" });
 
@@ -395,7 +448,7 @@ app.post("/tools/cancel-appointment", async (req, res) => {
 
 app.post("/tools/reschedule-appointment", async (req, res) => {
   try {
-    requireQueryToken(req, "TOOL_TOKEN");
+    const client_id = await getClientIdFromToolToken(req);
 
     const {
       client_id,
@@ -407,7 +460,7 @@ app.post("/tools/reschedule-appointment", async (req, res) => {
       notes,
     } = req.body || {};
 
-    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
+    
     if (!appointment_id)
       return res.status(400).json({ ok: false, error: "Missing appointment_id" });
     if (!new_start_time || !new_end_time)
@@ -489,7 +542,7 @@ app.post("/tools/reschedule-appointment", async (req, res) => {
 });
 app.post("/tools/find-appointment", async (req, res) => {
   try {
-    requireQueryToken(req, "TOOL_TOKEN");
+    const client_id = await getClientIdFromToolToken(req);
 
     const {
       client_id,
@@ -500,7 +553,7 @@ app.post("/tools/find-appointment", async (req, res) => {
       limit = 5
     } = req.body || {};
 
-    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
+    
     if (!customer_phone && !customer_email)
       return res.status(400).json({ ok: false, error: "Need customer_phone or customer_email" });
 
@@ -541,7 +594,6 @@ app.post("/retell-webhook", async (req, res) => {
     requireQueryToken(req, "WEBHOOK_TOKEN");
 
     const client_id = req.query.client_id;
-    if (!client_id) return res.status(400).json({ ok: false, error: "Missing client_id" });
 
     const event = req.body?.event;
     console.log("RETELL EVENT:", event);
