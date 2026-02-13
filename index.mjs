@@ -85,7 +85,16 @@ app.get("/health", (req, res) =>
     time: new Date().toISOString(),
   })
 );
-
+app.get("/version", (req, res) => {
+  res.json({
+    ok: true,
+    version: "FINAL_STABLE_V1",
+    render_git_commit: process.env.RENDER_GIT_COMMIT || null,
+    railway_git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    commit_guess: process.env.GIT_COMMIT || null,
+    time: new Date().toISOString(),
+  });
+});
 app.get("/version", (req, res) => res.json({ ok: true, version: VERSION }));
 
 // ------------------------------------------------------------
