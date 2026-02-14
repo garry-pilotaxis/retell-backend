@@ -321,13 +321,12 @@ app.get("/onboard/google/start", async (req, res) => {
     if (!client_id) return res.status(400).send("Missing client_id");
 
     const oauth2Client = getOAuthClient();
-    const url = oauth2Client.generateAuthUrl({
-      access_type: "offline",
-      prompt: "consent",
-      scope: [
-  "https://www.googleapis.com/auth/calendar"],,
-      state: String(client_id),
-    });
+const url = oauth2Client.generateAuthUrl({
+  access_type: "offline",
+  prompt: "consent",
+  scope: ["https://www.googleapis.com/auth/calendar"],
+  state: String(client_id),
+});
 
     return res.redirect(url);
   } catch (e) {
