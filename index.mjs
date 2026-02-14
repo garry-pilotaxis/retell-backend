@@ -16,6 +16,18 @@ console.log("BOOT:", VERSION, "CWD:", process.cwd());
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 
+app.get("/debug/routes", (req, res) => {
+  const routes = [];
+  const stack = app?._router?.stack || [];
+  for (const layer of stack) {
+    if (layer?.route?.path) {
+      const methods = Object.keys(layer.route.methods || {}).filter(Boolean);
+      routes.push({ path: layer.route.path, methods });
+    }
+  }
+  res.json({ ok: true, routes });
+});
+
 app.use((req, res, next) => {
   req.request_id = `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   console.log(
