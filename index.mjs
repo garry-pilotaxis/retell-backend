@@ -10,54 +10,15 @@ import { DateTime, Interval } from "luxon";
 // ------------------------------------------------------------
 // Boot
 // ------------------------------------------------------------
-const VERSION = "FINAL_STABLE_V1";
+const VERSION = "FINAL_STABLE_V2_ALL_TOOLS";
 console.log("BOOT:", VERSION, "CWD:", process.cwd());
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 
-app.get("/debug/routes", (req, res) => {
-  const routes = [];
-  const stack = app?._router?.stack || [];
-  for (const layer of stack) {
-    if (layer?.route?.path) {
-      const methods = Object.keys(layer.route.methods || {}).filter(Boolean);
-      routes.push({ path: layer.route.path, methods });
-    }
-  }
-  res.json({ ok: true, routes });
-});
-
-app.use((req, res, next) => {
-  req.request_id = `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  console.log(
-    JSON.stringify({
-      request_id: req.request_id,
-      msg: "INCOMING",
-      method: req.method,
-      path: req.path,
-      query: req.query,
-    })
-  );
-  next();
-});
-app.get("/debug/routes", (req, res) => {
-  const routes = [];
-  const stack = app?._router?.stack || [];
-  for (const layer of stack) {
-    if (layer.route?.path) {
-      routes.push({
-        path: layer.route.path,
-        methods: Object.keys(layer.route.methods || {}).map(m => m.toUpperCase()),
-      });
-    }
-  }
-  res.json({ ok: true, routes });
-});
-app.get("/version", (req, res) => {
-  res.json({ ok: true, version: "BOOK_ROUTE_FIX__2026-02-13_23-30" });
-});
-
+// ------------------------------------------------------------
+// Helpers
+// ------------------------------------------------------------
 function mustEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Server misconfigured: ${name} missing`);
@@ -77,6 +38,47 @@ function logError(req, err, where, extra = {}) {
   );
 }
 
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function normalizeTranscriptFromRetellCall(call) {
+  if (typeof call?.transcript === "string" && call.transcript.trim()) return call.transcript.trim();
+  const twtc = call?.transcript_with_tool_calls;
+  if (Array.isArray(twtc) && twtc.length) {
+    return twtc.map((m) => `${(m.role || "unknown").toUpperCase()}: ${m.content || ""}`).join("\n");
+  }
+  return "";
+}
+
+function detectAction(summary, transcript) {
+  const text = `${summary} ${transcript}`.toLowerCase();
+  if (text.includes("cancel")) return "cancel";
+  if (text.includes("resched")) return "reschedule";
+  if (text.includes("book") || text.includes("schedule")) return "book";
+  return "unknown";
+}
+
+// ------------------------------------------------------------
+// Request logger
+// ------------------------------------------------------------
+app.use((req, res, next) => {
+  req.request_id = `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  console.log(
+    JSON.stringify({
+      request_id: req.request_id,
+      msg: "INCOMING",
+      method: req.method,
+      path: req.path,
+      query: req.query,
+    })
+  );
+  next();
+});
+
 // ------------------------------------------------------------
 // Clients
 // ------------------------------------------------------------
@@ -84,7 +86,7 @@ const supabase = createClient(mustEnv("SUPABASE_URL"), mustEnv("SUPABASE_SERVICE
 const resend = new Resend(mustEnv("RESEND_API_KEY"));
 
 // ------------------------------------------------------------
-// Public routes (PUT THESE FIRST so they ALWAYS register)
+// Public routes
 // ------------------------------------------------------------
 app.get("/", (req, res) => res.send(`${VERSION}__${new Date().toISOString()}`));
 
@@ -97,20 +99,31 @@ app.get("/health", (req, res) =>
     time: new Date().toISOString(),
   })
 );
+
 app.get("/version", (req, res) => {
   res.json({
     ok: true,
-    version: "FINAL_STABLE_V1",
+    version: VERSION,
     render_git_commit: process.env.RENDER_GIT_COMMIT || null,
-    railway_git_commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     commit_guess: process.env.GIT_COMMIT || null,
     time: new Date().toISOString(),
   });
 });
-app.get("/version", (req, res) => res.json({ ok: true, version: VERSION }));
+
+app.get("/debug/routes", (req, res) => {
+  const routes = [];
+  const stack = app?._router?.stack || [];
+  for (const layer of stack) {
+    if (layer?.route?.path) {
+      const methods = Object.keys(layer.route.methods || {}).map((m) => m.toUpperCase());
+      routes.push({ path: layer.route.path, methods });
+    }
+  }
+  res.json({ ok: true, routes });
+});
 
 // ------------------------------------------------------------
-// Webhook auth (query token)
+// Webhook auth (?token=...)
 // ------------------------------------------------------------
 function requireWebhookToken(req) {
   const got = String(req.query?.token || "").trim();
@@ -171,7 +184,7 @@ async function toolAuth(req, res, next) {
   }
 }
 
-// If client_id is present in body, enforce match
+// Optional body client_id must match locked token client_id
 function enforceClientIdMatch(req, res) {
   if (req.body?.client_id && String(req.body.client_id) !== String(req.client_id)) {
     res.status(403).json({ ok: false, error: "client_id does not match token" });
@@ -246,9 +259,7 @@ function validateAgainstBusinessRules({ startISO, endISO, rules }) {
     const lunchEnd = start.set({ hour: rules.lunch_end_hour, minute: 0, second: 0, millisecond: 0 });
     const lunchInterval = Interval.fromDateTimes(lunchStart, lunchEnd);
     const slotInterval = Interval.fromDateTimes(start, end);
-    if (lunchInterval.overlaps(slotInterval)) {
-      return { ok: false, error: "Conflicts with lunch break" };
-    }
+    if (lunchInterval.overlaps(slotInterval)) return { ok: false, error: "Conflicts with lunch break" };
   }
 
   return { ok: true };
@@ -282,29 +293,8 @@ async function hasOverlapInSupabase(client_id, startISO, endISO, ignoreAppointme
 }
 
 // ------------------------------------------------------------
-// Retell fetch helpers
+// Retell fetch
 // ------------------------------------------------------------
-function escapeHtml(s) {
-  return String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function normalizeTranscriptFromRetellCall(call) {
-  if (typeof call?.transcript === "string" && call.transcript.trim()) return call.transcript.trim();
-  const twtc = call?.transcript_with_tool_calls;
-  if (Array.isArray(twtc) && twtc.length) {
-    return twtc.map((m) => `${(m.role || "unknown").toUpperCase()}: ${m.content || ""}`).join("\n");
-  }
-  return "";
-}
-
-function detectAction(summary, transcript) {
-  const text = `${summary} ${transcript}`.toLowerCase();
-  if (text.includes("cancel")) return "cancel";
-  if (text.includes("resched")) return "reschedule";
-  if (text.includes("book") || text.includes("schedule")) return "book";
-  return "unknown";
-}
-
 async function fetchRetellCall(call_id) {
   const url = `https://api.retellai.com/v2/get-call/${call_id}`;
   const resp = await axios.get(url, {
@@ -337,6 +327,7 @@ app.get("/onboard/google/start", async (req, res) => {
       scope: ["https://www.googleapis.com/auth/calendar.events"],
       state: String(client_id),
     });
+
     return res.redirect(url);
   } catch (e) {
     logError(req, e, "onboard/google/start");
@@ -376,13 +367,15 @@ app.get("/onboard/google/callback", async (req, res) => {
 // ------------------------------------------------------------
 // TOOLS
 // ------------------------------------------------------------
+
+// 1) CHECK AVAILABILITY
 app.post("/tools/check-availability", toolAuth, async (req, res) => {
   try {
     if (!enforceClientIdMatch(req, res)) return;
 
     const client_id = req.client_id;
     const {
-      date, // YYYY-MM-DD
+      date,
       duration_minutes = 30,
       timezone = "America/Toronto",
       start_hour,
@@ -409,6 +402,7 @@ app.post("/tools/check-availability", toolAuth, async (req, res) => {
       second: 0,
       millisecond: 0,
     });
+
     const dayEnd = DateTime.fromISO(date, { zone: rules.timezone }).set({
       hour: rules.end_hour,
       minute: 0,
@@ -450,7 +444,7 @@ app.post("/tools/check-availability", toolAuth, async (req, res) => {
       });
       if (!check.ok) continue;
 
-      const overlaps = busy.some((b) => t < b.end && (t + durMs) > b.start);
+      const overlaps = busy.some((b) => t < b.end && t + durMs > b.start);
       if (!overlaps) {
         slots.push({
           start_time: slotStartUTC.setZone(rules.timezone).toISO(),
@@ -462,6 +456,286 @@ app.post("/tools/check-availability", toolAuth, async (req, res) => {
     return res.json({ ok: true, date, timezone: rules.timezone, slots });
   } catch (e) {
     logError(req, e, "tools/check-availability");
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2) BOOK APPOINTMENT
+app.post("/tools/book-appointment", toolAuth, async (req, res) => {
+  try {
+    if (!enforceClientIdMatch(req, res)) return;
+    const client_id = req.client_id;
+
+    const {
+      start_time,
+      end_time,
+      timezone = "America/Toronto",
+      title = "Appointment",
+      customer_name,
+      customer_email,
+      customer_phone,
+      notes,
+      idempotency_key,
+    } = req.body || {};
+
+    if (!start_time || !end_time)
+      return res.status(400).json({ ok: false, error: "Missing start_time/end_time" });
+
+    if (!idempotency_key)
+      return res.status(400).json({ ok: false, error: "Missing idempotency_key" });
+
+    const rules = getDefaultBusinessRules(timezone);
+    const ruleCheck = validateAgainstBusinessRules({ startISO: start_time, endISO: end_time, rules });
+    if (!ruleCheck.ok) return res.status(400).json({ ok: false, error: ruleCheck.error });
+
+    // prevent overlap (db)
+    const overlapDb = await hasOverlapInSupabase(client_id, start_time, end_time);
+    if (overlapDb) return res.status(409).json({ ok: false, error: "Time slot already booked" });
+
+    const { calendar, calendar_id } = await getClientCalendar(client_id);
+
+    // prevent overlap (google)
+    const free = await isFreeInGoogleCalendar(calendar, calendar_id, start_time, end_time);
+    if (!free) return res.status(409).json({ ok: false, error: "Time slot busy in calendar" });
+
+    // create event
+    const eventResp = await calendar.events.insert({
+      calendarId: calendar_id,
+      requestBody: {
+        summary: title,
+        description: [
+          "Booked by AI",
+          customer_name ? `Name: ${customer_name}` : null,
+          customer_email ? `Email: ${customer_email}` : null,
+          customer_phone ? `Phone: ${customer_phone}` : null,
+          notes ? `Notes: ${notes}` : null,
+        ].filter(Boolean).join("\n"),
+        start: { dateTime: start_time, timeZone: timezone },
+        end: { dateTime: end_time, timeZone: timezone },
+      },
+    });
+
+    const google_event_id = eventResp.data.id;
+
+    // store in db
+    const { data, error } = await supabase
+      .from("appointments")
+      .insert({
+        client_id,
+        customer_name: customer_name || null,
+        customer_email: customer_email || null,
+        customer_phone: customer_phone || null,
+        start_time,
+        end_time,
+        timezone,
+        status: "booked",
+        google_calendar_id: calendar_id,
+        google_event_id,
+        title,
+        notes: notes || null,
+        idempotency_key,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      appointment_id: data.id,
+      google_event_id,
+      start_time,
+      end_time,
+    });
+  } catch (e) {
+    logError(req, e, "tools/book-appointment");
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 3) CANCEL APPOINTMENT
+app.post("/tools/cancel-appointment", toolAuth, async (req, res) => {
+  try {
+    if (!enforceClientIdMatch(req, res)) return;
+    const client_id = req.client_id;
+
+    const { appointment_id } = req.body || {};
+    if (!appointment_id) return res.status(400).json({ ok: false, error: "Missing appointment_id" });
+
+    const { data: appt, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("id", appointment_id)
+      .eq("client_id", client_id)
+      .single();
+
+    if (error) throw error;
+
+    const { calendar, calendar_id } = await getClientCalendar(client_id);
+
+    if (appt.google_event_id) {
+      await calendar.events.delete({ calendarId: calendar_id, eventId: appt.google_event_id });
+    }
+
+    await supabase.from("appointments").update({ status: "cancelled" }).eq("id", appt.id);
+
+    return res.json({ ok: true, cancelled_appointment_id: appt.id });
+  } catch (e) {
+    logError(req, e, "tools/cancel-appointment");
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 4) RESCHEDULE APPOINTMENT
+app.post("/tools/reschedule-appointment", toolAuth, async (req, res) => {
+  try {
+    if (!enforceClientIdMatch(req, res)) return;
+    const client_id = req.client_id;
+
+    const {
+      appointment_id,
+      new_start_time,
+      new_end_time,
+      timezone = "America/Toronto",
+      new_title,
+      notes,
+    } = req.body || {};
+
+    if (!appointment_id) return res.status(400).json({ ok: false, error: "Missing appointment_id" });
+    if (!new_start_time || !new_end_time)
+      return res.status(400).json({ ok: false, error: "Missing new_start_time/new_end_time" });
+
+    const rules = getDefaultBusinessRules(timezone);
+    const ruleCheck = validateAgainstBusinessRules({
+      startISO: new_start_time,
+      endISO: new_end_time,
+      rules,
+    });
+    if (!ruleCheck.ok) return res.status(400).json({ ok: false, error: ruleCheck.error });
+
+    const { data: oldAppt, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("id", appointment_id)
+      .eq("client_id", client_id)
+      .single();
+
+    if (error) throw error;
+
+    // check overlap BEFORE deleting old
+    const overlapDb = await hasOverlapInSupabase(client_id, new_start_time, new_end_time, oldAppt.id);
+    if (overlapDb) return res.status(409).json({ ok: false, error: "New slot already booked" });
+
+    const { calendar, calendar_id } = await getClientCalendar(client_id);
+
+    const free = await isFreeInGoogleCalendar(calendar, calendar_id, new_start_time, new_end_time);
+    if (!free) return res.status(409).json({ ok: false, error: "New slot busy in calendar" });
+
+    // delete old event
+    if (oldAppt.google_event_id) {
+      await calendar.events.delete({ calendarId: calendar_id, eventId: oldAppt.google_event_id });
+    }
+
+    // create new event
+    const eventResp = await calendar.events.insert({
+      calendarId: calendar_id,
+      requestBody: {
+        summary: new_title || oldAppt.title || "Appointment (Rescheduled)",
+        description: [
+          "Rescheduled by AI",
+          oldAppt.customer_name ? `Name: ${oldAppt.customer_name}` : null,
+          oldAppt.customer_email ? `Email: ${oldAppt.customer_email}` : null,
+          oldAppt.customer_phone ? `Phone: ${oldAppt.customer_phone}` : null,
+          notes ? `Notes: ${notes}` : null,
+        ].filter(Boolean).join("\n"),
+        start: { dateTime: new_start_time, timeZone: timezone },
+        end: { dateTime: new_end_time, timeZone: timezone },
+      },
+    });
+
+    const newGoogleEventId = eventResp.data.id;
+
+    // mark old row
+    await supabase.from("appointments").update({ status: "rescheduled" }).eq("id", oldAppt.id);
+
+    // insert new row
+    const { data: newAppt, error: insErr } = await supabase
+      .from("appointments")
+      .insert({
+        client_id,
+        customer_name: oldAppt.customer_name || null,
+        customer_email: oldAppt.customer_email || null,
+        customer_phone: oldAppt.customer_phone || null,
+        start_time: new_start_time,
+        end_time: new_end_time,
+        timezone,
+        status: "booked",
+        google_calendar_id: calendar_id,
+        google_event_id: newGoogleEventId,
+        previous_appointment_id: oldAppt.id,
+        title: new_title || oldAppt.title || "Appointment (Rescheduled)",
+        notes: notes || null,
+      })
+      .select()
+      .single();
+
+    if (insErr) throw insErr;
+
+    return res.json({
+      ok: true,
+      old_appointment_id: oldAppt.id,
+      new_appointment_id: newAppt.id,
+      new_google_event_id: newGoogleEventId,
+    });
+  } catch (e) {
+    logError(req, e, "tools/reschedule-appointment");
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 5) FIND APPOINTMENT
+app.post("/tools/find-appointment", toolAuth, async (req, res) => {
+  try {
+    if (!enforceClientIdMatch(req, res)) return;
+    const client_id = req.client_id;
+
+    const { customer_phone, customer_email, from_date, to_date, limit = 5, timezone = "America/Toronto" } =
+      req.body || {};
+
+    if (!customer_phone && !customer_email) {
+      return res.status(400).json({ ok: false, error: "Need customer_phone or customer_email" });
+    }
+
+    const zone = timezone;
+    const now = DateTime.now().setZone(zone);
+
+    const fromISO = from_date
+      ? DateTime.fromISO(from_date, { zone }).startOf("day").toUTC().toISO()
+      : now.toUTC().toISO();
+
+    const toISO = to_date
+      ? DateTime.fromISO(to_date, { zone }).endOf("day").toUTC().toISO()
+      : now.plus({ days: 30 }).toUTC().toISO();
+
+    let q = supabase
+      .from("appointments")
+      .select("id,start_time,end_time,status,customer_name,customer_email,customer_phone,title")
+      .eq("client_id", client_id)
+      .in("status", ["booked"])
+      .gte("start_time", fromISO)
+      .lte("start_time", toISO)
+      .order("start_time", { ascending: true })
+      .limit(limit);
+
+    if (customer_phone) q = q.eq("customer_phone", customer_phone);
+    if (customer_email) q = q.eq("customer_email", customer_email);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    return res.json({ ok: true, matches: data || [] });
+  } catch (e) {
+    logError(req, e, "tools/find-appointment");
     return res.status(500).json({ ok: false, error: e.message });
   }
 });
